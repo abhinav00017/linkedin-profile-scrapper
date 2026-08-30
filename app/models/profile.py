@@ -1,8 +1,11 @@
-"""The response schema. This is what callers of the API get back."""
+"""The shape we return to callers.
+
+Deliberately not LinkedIn's shape. LinkedIn returns a normalised graph built
+for their own UI; callers want a flat, predictable document.
+"""
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Literal
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -10,13 +13,13 @@ from pydantic import BaseModel, Field
 class Name(BaseModel):
     first: str | None = None
     last: str | None = None
-    full: str
+    full: str | None = None
 
 
 class Location(BaseModel):
     country_code: str | None = None
+    locality: str | None = None
     geo_urn: str | None = None
-    name: str | None = None
 
 
 class Images(BaseModel):
@@ -64,7 +67,7 @@ class Skill(BaseModel):
 
 
 class Certification(BaseModel):
-    name: str | None = None
+    name: str
     authority: str | None = None
     issued: DateParts | None = None
     url: str | None = None
@@ -75,26 +78,27 @@ class Language(BaseModel):
     proficiency: str | None = None
 
 
-class Meta(BaseModel):
-    strategy: str
-    fetched_at: datetime
-    duration_ms: int | None = None
-    partial: bool = False
-    missing_sections: list[str] = Field(default_factory=list)
+class ProfileCore(BaseModel):
+    """Everything the core profile call gives us.
 
+    Sections arrive separately, so they default empty rather than missing.
+    """
 
-class Profile(BaseModel):
-    profile_url: str
-    public_id: str
+    profile_url: str | None = None
+    public_id: str | None = None
     urn: str | None = None
-    member_urn: str | None = None
-
-    name: Name
+    name: Name = Field(default_factory=Name)
     headline: str | None = None
     about: str | None = None
     location: Location = Field(default_factory=Location)
     images: Images = Field(default_factory=Images)
     websites: list[Website] = Field(default_factory=list)
+    industry_urn: str | None = None
+    is_premium: bool = False
+    is_influencer: bool = False
+
+    # urns we need to fetch the sections with
+    card_urns: dict[str, str] = Field(default_factory=dict)
 
     experience: list[Experience] = Field(default_factory=list)
     education: list[Education] = Field(default_factory=list)
@@ -102,41 +106,4 @@ class Profile(BaseModel):
     certifications: list[Certification] = Field(default_factory=list)
     languages: list[Language] = Field(default_factory=list)
 
-    is_influencer: bool = False
-    is_premium: bool = False
-
-    # Internal: urns the section fetches need. Not part of the public response.
-    card_urns: dict[str, str] = Field(default_factory=dict, exclude=True)
-
-    meta: Meta | None = None
-
-
-class AuthRequest(BaseModel):
-    li_at: str = Field(min_length=20, description="The li_at cookie from a logged-in LinkedIn session")
-    jsessionid: str | None = Field(default=None, description="The JSESSIONID cookie, if you have it")
-    cookie_header: str | None = Field(default=None, description="A full cookie header, as an alternative to the two above")
-
-
-class AuthResponse(BaseModel):
-    api_key: str
-    linkedin_member: dict[str, str | None]
-    created_at: datetime
-
-
-class ErrorBody(BaseModel):
-    code: str
-    message: str
-
-
-class ErrorResponse(BaseModel):
-    error: ErrorBody
-
-
-ErrorCode = Literal[
-    "invalid_profile_url",
-    "invalid_api_key",
-    "linkedin_session_dead",
-    "profile_not_found",
-    "rate_limited",
-    "linkedin_unexpected_response",
-]
+    meta: dict[str, Any] = Field(default_factory=dict)

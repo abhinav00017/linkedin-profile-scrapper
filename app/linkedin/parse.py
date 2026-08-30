@@ -1,30 +1,42 @@
-"""Turn LinkedIn's Voyager JSON into our response schema.
+"""Turn LinkedIn's normalised response graph into our flat schema.
 
-Voyager answers with a flat `included` list of typed objects. Nothing here
-touches the network, so every rule below is testable against a saved fixture.
+No network here on purpose. Everything in this module is a pure function of
+the JSON it is given, so it can be tested against saved fixtures.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from app.models.profile import Images, Location, Name, Profile, Website
+from app.models.profile import (
+    Images,
+    Location,
+    Name,
+    ProfileCore,
+    Website,
+)
 
 PROFILE_TYPE = "com.linkedin.voyager.dash.identity.profile.Profile"
 
 
 class ProfileNotInResponse(ValueError):
-    """LinkedIn answered, but the payload held no profile."""
+    """LinkedIn answered, but the response carries no profile."""
 
 
-def _find(included: list[dict[str, Any]], type_suffix: str) -> list[dict[str, Any]]:
-    return [o for o in included if str(o.get("$type", "")).endswith(type_suffix)]
+def _find_profile(raw: dict[str, Any]) -> dict[str, Any]:
+    for obj in raw.get("included") or []:
+        if obj.get("$type") == PROFILE_TYPE:
+            return obj
+    raise ProfileNotInResponse(
+        "no Profile object in the response — the profile may be private, "
+        "deleted, or outside what this session may view"
+    )
 
 
 def _largest_image_url(picture: Any) -> str | None:
-    """Build the URL of the biggest artifact in a LinkedIn vector image.
+    """Build the URL of the biggest artifact LinkedIn offers.
 
-    LinkedIn splits an image into a root URL plus one path segment per size.
-    The full URL is the two joined.
+    A vector image is a root URL plus a list of sized artifacts. The full URL
+    is the root concatenated with an artifact's path segment.
     """
     if not isinstance(picture, dict):
         return None
@@ -46,56 +58,60 @@ def _largest_image_url(picture: Any) -> str | None:
     return f"{root}{segment}"
 
 
-def _full_name(first: str | None, last: str | None) -> str:
-    return " ".join(part for part in (first, last) if part).strip()
+def _full_name(first: str | None, last: str | None) -> str | None:
+    parts = [p for p in (first, last) if p]
+    return " ".join(parts) if parts else None
 
 
-def parse_dash_profile(payload: dict[str, Any]) -> Profile:
-    """Parse a /identity/dash/profiles?q=memberIdentity response."""
-    included = payload.get("included") or []
-    profiles = _find(included, "identity.profile.Profile")
-    if not profiles:
-        raise ProfileNotInResponse("no Profile object in the response")
+def _card_urns(profile: dict[str, Any]) -> dict[str, str]:
+    """Collect the section card urns the core response hands us."""
+    out: dict[str, str] = {}
+    for key, name in (("experienceCardUrn", "experience"),
+                      ("educationCardUrn", "education")):
+        value = profile.get(key)
+        if isinstance(value, str) and value:
+            out[name] = value
+    return out
 
-    p = profiles[0]
 
-    public_id = p.get("publicIdentifier") or ""
-    first, last = p.get("firstName"), p.get("lastName")
+def parse_dash_profile(raw: dict[str, Any]) -> ProfileCore:
+    """Parse the /identity/dash/profiles response into our core profile."""
+    profile = _find_profile(raw)
 
-    card_urns: dict[str, str] = {}
-    for key, section in (("experienceCardUrn", "experience"),
-                         ("educationCardUrn", "education")):
-        if p.get(key):
-            card_urns[section] = p[key]
+    first = profile.get("firstName")
+    last = profile.get("lastName")
+    public_id = profile.get("publicIdentifier")
+
+    location_obj = profile.get("location") or {}
+    geo_obj = profile.get("geoLocation") or {}
 
     websites = [
         Website(category=w.get("category"), url=w["url"])
-        for w in (p.get("websites") or [])
+        for w in (profile.get("websites") or [])
         if isinstance(w, dict) and w.get("url")
     ]
 
-    geo = p.get("geoLocation") or {}
-    loc = p.get("location") or {}
-
-    return Profile(
-        profile_url=f"https://www.linkedin.com/in/{public_id}/",
+    return ProfileCore(
+        profile_url=(
+            f"https://www.linkedin.com/in/{public_id}/" if public_id else None
+        ),
         public_id=public_id,
-        urn=p.get("entityUrn"),
-        member_urn=p.get("objectUrn"),
+        urn=profile.get("entityUrn"),
         name=Name(first=first, last=last, full=_full_name(first, last)),
-        headline=p.get("headline"),
-        about=p.get("summary"),
+        headline=profile.get("headline"),
+        about=profile.get("summary"),
         location=Location(
-            country_code=loc.get("countryCode"),
-            geo_urn=geo.get("geoUrn"),
-            name=p.get("locationName"),
+            country_code=location_obj.get("countryCode"),
+            locality=profile.get("locationName"),
+            geo_urn=geo_obj.get("geoUrn"),
         ),
         images=Images(
-            profile=_largest_image_url(p.get("profilePicture")),
-            background=_largest_image_url(p.get("backgroundPicture")),
+            profile=_largest_image_url(profile.get("profilePicture")),
+            background=_largest_image_url(profile.get("backgroundPicture")),
         ),
         websites=websites,
-        is_influencer=bool(p.get("influencer")),
-        is_premium=bool(p.get("premium")),
-        card_urns=card_urns,
+        industry_urn=profile.get("industryUrn"),
+        is_premium=bool(profile.get("premium")),
+        is_influencer=bool(profile.get("influencer")),
+        card_urns=_card_urns(profile),
     )
