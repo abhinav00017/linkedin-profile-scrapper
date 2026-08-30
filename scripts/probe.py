@@ -1,15 +1,44 @@
-"""Throwaway probe harness. Never follows redirects. Aborts the moment
-LinkedIn signals a dead session, so one bad cookie cannot cascade."""
-import json, pathlib, sys
+"""Throwaway probe harness.
+
+Hard rules, learned by burning two sessions:
+  * never follow a redirect
+  * never send the session at an HTML document route unless we hold a full
+    browser cookie set — LinkedIn revokes the session when we do
+  * abort the instant LinkedIn signals a dead session
+  * cache every response, so one live request serves all later work
+"""
+import hashlib, json, pathlib, sys
 import httpx
 
 env = {}
 for line in pathlib.Path(".env.local").read_text().splitlines():
+    line = line.strip()
     if "=" in line and not line.startswith("#"):
         k, v = line.split("=", 1)
         env[k.strip()] = v.strip()
 
-LI_AT, JSESSIONID = env["LI_AT"], env["JSESSIONID"].strip('"')
+COOKIE_HEADER = env.get("COOKIE_HEADER", "").strip()
+
+def _cookies_from_header(h: str) -> dict:
+    out = {}
+    for part in h.split(";"):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+if COOKIE_HEADER:
+    COOKIES = _cookies_from_header(COOKIE_HEADER)
+    FULL_JAR = True
+else:
+    COOKIES = {"li_at": env["LI_AT"], "JSESSIONID": f'"{env["JSESSIONID"].strip(chr(34))}"'}
+    FULL_JAR = False
+
+JSESSIONID = COOKIES.get("JSESSIONID", "").strip('"')
+if not JSESSIONID:
+    sys.exit("no JSESSIONID in the cookie set — cannot build a csrf token")
+
+print(f"cookie jar: {len(COOKIES)} cookies {'(FULL browser set)' if FULL_JAR else '(minimal — API routes only)'}")
 
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -25,45 +54,32 @@ API_HEADERS = {
 }
 
 def client():
-    return httpx.Client(
-        headers=API_HEADERS,
-        cookies={"li_at": LI_AT, "JSESSIONID": f'"{JSESSIONID}"'},
-        timeout=30.0,
-        follow_redirects=False,   # never loop
-        max_redirects=0,
-    )
+    return httpx.Client(headers=API_HEADERS, cookies=COOKIES, timeout=30.0,
+                        follow_redirects=False, max_redirects=0)
+
+def _guard(url: str) -> None:
+    """Refuse to send the session anywhere that revokes it."""
+    if "/voyager/api/" in url:
+        return
+    if not FULL_JAR:
+        raise RuntimeError(
+            f"BLOCKED: {url}\n"
+            "  Only /voyager/api/ routes are safe with a minimal cookie set.\n"
+            "  LinkedIn revokes the session on HTML routes. Supply COOKIE_HEADER first."
+        )
 
 def session_dead(r) -> bool:
     return "delete me" in r.headers.get("set-cookie", "")
 
-def get(c, label, url, params=None, headers=None, show_chars=500):
-    r = c.get(url, params=params, headers=headers or {})
-    print(f"\n--- {label}\nHTTP {r.status_code}  len={len(r.content)}")
-    if session_dead(r):
-        print("!! SESSION DEAD — LinkedIn cleared li_at. Stopping so we don't burn it further.")
-        sys.exit(2)
-    if r.status_code in (301, 302, 303, 307, 308):
-        print("redirect ->", r.headers.get("location", "")[:160])
-        return r
-    try:
-        print(json.dumps(r.json(), indent=2)[:show_chars])
-    except Exception:
-        print(r.text[:show_chars])
-    return r
-
-
-# ---- disk cache: each distinct call hits LinkedIn at most once -------------
-import hashlib, os
-
 CACHE = pathlib.Path(".cache/linkedin")
 
 def cached_get(c, label, url, params=None, headers=None, show_chars=500, force=False):
-    """Fetch once, then replay from disk forever. Saves status, headers, body."""
+    _guard(url)
     key = hashlib.sha256(f"{url}|{sorted((params or {}).items())}".encode()).hexdigest()[:16]
     path = CACHE / f"{key}.json"
     if path.exists() and not force:
         blob = json.loads(path.read_text())
-        print(f"\n--- {label}  [CACHED {path.name}]\nHTTP {blob['status']}  len={len(blob['body'])}")
+        print(f"\n--- {label}  [CACHED]\nHTTP {blob['status']}  len={len(blob['body'])}")
         print(blob["body"][:show_chars])
         return blob
 
@@ -72,14 +88,14 @@ def cached_get(c, label, url, params=None, headers=None, show_chars=500, force=F
         print(f"\n--- {label}\n!! SESSION DEAD — not caching. Stopping.")
         sys.exit(2)
 
-    blob = {
-        "label": label, "url": str(r.url), "status": r.status_code,
-        "headers": dict(r.headers), "body": r.text,
-    }
+    blob = {"label": label, "url": str(r.url), "status": r.status_code,
+            "headers": dict(r.headers), "body": r.text}
     CACHE.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(blob, indent=2))
-    print(f"\n--- {label}  [FETCHED -> {path.name}]\nHTTP {r.status_code}  len={len(r.text)}")
+    print(f"\n--- {label}  [FETCHED]\nHTTP {r.status_code}  len={len(r.text)}")
     if r.status_code in (301, 302, 303, 307, 308):
         print("redirect ->", r.headers.get("location", "")[:160])
     print(r.text[:show_chars])
     return blob
+
+get = cached_get
