@@ -132,6 +132,12 @@ async def get_profile(
     settings: Settings = Depends(get_settings),
 ) -> ProfileCore:
     """Fetch a LinkedIn profile as structured JSON."""
+    # Public demo mode: with no key, fall back to the bootstrap session so a
+    # reviewer can call the API with no key at all. Every keyless request then
+    # shares the bootstrap key's rate-limit bucket, which protects the account.
+    if not x_api_key and settings.public_demo and settings.bootstrap_api_key:
+        x_api_key = settings.bootstrap_api_key
+
     if not x_api_key:
         raise fail(401, "missing_api_key", "Send your key in the X-API-Key header.")
 

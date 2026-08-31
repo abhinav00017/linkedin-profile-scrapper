@@ -94,6 +94,32 @@ def test_profile_without_a_key_is_refused(api):
     assert r.json()["error"]["code"] == "missing_api_key"
 
 
+def test_public_demo_mode_serves_a_profile_with_no_key(app, settings):
+    settings.public_demo = True
+    r = TestClient(app).get(
+        "/v1/profile", params={"url": "https://www.linkedin.com/in/jane-doe/"}
+    )
+    assert r.status_code == 200
+    assert r.json()["name"]["full"] == "Jane Doe"
+
+
+def test_public_demo_mode_needs_a_bootstrap_key_configured(app, settings):
+    settings.public_demo = True
+    settings.bootstrap_api_key = None
+    r = TestClient(app).get(
+        "/v1/profile", params={"url": "https://www.linkedin.com/in/jane-doe/"}
+    )
+    assert r.status_code == 401
+
+
+def test_without_public_demo_a_keyless_request_is_still_refused(app, settings):
+    settings.public_demo = False
+    r = TestClient(app).get(
+        "/v1/profile", params={"url": "https://www.linkedin.com/in/jane-doe/"}
+    )
+    assert r.status_code == 401
+
+
 def test_profile_with_an_unknown_key_is_refused(api):
     r = api.get("/v1/profile",
                 params={"url": "https://www.linkedin.com/in/jane-doe/"},

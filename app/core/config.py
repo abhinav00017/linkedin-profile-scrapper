@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     bootstrap_jsessionid: str | None = None
     bootstrap_cookie_header: str | None = None
 
+    # When true, a request with no API key falls back to the bootstrap
+    # session, so a reviewer can call the API with no key at all. Off by
+    # default; turn it on only for a public demo, never with a real account.
+    public_demo: bool = False
+
     # Caps exist to protect the LinkedIn account behind a key, not to
     # restrict the caller. Ordinary use never reaches them.
     rate_limit_per_minute: int = 10
