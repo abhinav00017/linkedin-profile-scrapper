@@ -50,9 +50,13 @@ def app(settings, monkeypatch):
     async def fake_public(self, public_id, attempts=3):
         return PUBLIC_PERSON
 
+    async def fake_experience(self, public_id):
+        return None
+
     monkeypatch.setattr(li_client.LinkedInClient, "validate", fake_validate)
     monkeypatch.setattr(li_client.LinkedInClient, "fetch_core_profile", fake_core)
     monkeypatch.setattr(li_client.LinkedInClient, "fetch_public_jsonld", fake_public)
+    monkeypatch.setattr(li_client.LinkedInClient, "fetch_experience_page", fake_experience)
 
     application = create_app()
     application.dependency_overrides[get_settings] = lambda: settings

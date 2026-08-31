@@ -205,6 +205,23 @@ class LinkedInClient:
                 )
             return r.json()
 
+    async def fetch_experience_page(self, public_id: str) -> str | None:
+        """The /details/experience/ page, which LinkedIn server-renders.
+
+        This is the richest source we can reach without a browser: titles,
+        companies, employment types, dates, locations and descriptions, all
+        unmasked. Sent with the full cookie jar, because a page route with a
+        thin cookie set gets the session revoked.
+        """
+        url = f"https://www.linkedin.com/in/{public_id}/details/experience/"
+        async with httpx.AsyncClient(
+            headers=self._doc_headers(), cookies=self.session.cookies(),
+            timeout=self._timeout, follow_redirects=False,
+        ) as c:
+            r = await c.get(url)
+            self._check(r)
+            return r.text if r.status_code == 200 else None
+
     async def fetch_public_jsonld(self, public_id: str, attempts: int = 3) -> dict | None:
         """The logged-out read. Adds experience and education.
 

@@ -45,11 +45,14 @@ class Experience(BaseModel):
     company: str | None = None
     company_url: str | None = None
     location: str | None = None
+    work_mode: str | None = None      # On-site, Remote, Hybrid
     employment_type: str | None = None
     start: DateParts | None = None
     end: DateParts | None = None
     is_current: bool = False
+    duration: str | None = None       # as LinkedIn words it, e.g. "1 yr 3 mos"
     description: str | None = None
+    skills: list[str] = Field(default_factory=list)
 
 
 class Education(BaseModel):

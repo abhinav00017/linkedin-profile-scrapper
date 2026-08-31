@@ -5,6 +5,7 @@ use that key to read any profile.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime, timezone
 
@@ -22,6 +23,7 @@ from app.linkedin.client import (
     SessionDead,
 )
 from app.linkedin.jsonld import NoPersonInJsonLd, parse_person
+from app.linkedin.details import parse_experience_page
 from app.linkedin.merge import merge_profile
 from app.linkedin.parse import ProfileNotInResponse, parse_dash_profile
 from app.linkedin.urls import InvalidProfileUrl, parse_profile_url
@@ -173,17 +175,30 @@ async def get_profile(
     except LinkedInError as exc:
         raise fail(502, "linkedin_unexpected_response", str(exc)) from exc
 
-    # Sections come from the public page. It is allowed to fail: a partial
+    # Sections come from two further sources, fetched at the same time since
+    # neither depends on the other. Both are allowed to fail: a partial
     # profile beats no profile, and meta says what is missing.
-    public = None
-    try:
-        node = await client.fetch_public_jsonld(ref.public_id)
-        if node:
-            public = parse_person(node)
-    except (LinkedInError, NoPersonInJsonLd, ValueError):
-        public = None
+    node, page = await asyncio.gather(
+        client.fetch_public_jsonld(ref.public_id),
+        client.fetch_experience_page(ref.public_id),
+        return_exceptions=True,
+    )
 
-    profile = merge_profile(core, public)
+    public = None
+    if isinstance(node, dict):
+        try:
+            public = parse_person(node)
+        except (NoPersonInJsonLd, ValueError):
+            public = None
+
+    experience = None
+    if isinstance(page, str):
+        try:
+            experience = parse_experience_page(page)
+        except ValueError:
+            experience = None
+
+    profile = merge_profile(core, public, experience)
     profile.profile_url = ref.canonical_url
     profile.meta["fetched_at"] = datetime.now(timezone.utc).isoformat()
     profile.meta["duration_ms"] = int((time.monotonic() - started) * 1000)
