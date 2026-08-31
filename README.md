@@ -112,12 +112,17 @@ Company, school, job and post URLs are rejected with `400`.
   "websites": [{ "category": "BLOG", "url": "https://gatesnot.es/…" }],
   "experience": [
     {
-      "title": "Co-chair",
-      "company": "Gates Foundation",
-      "company_url": "https://www.linkedin.com/company/gates-foundation",
-      "start": { "year": 2000 },
-      "end": null,
-      "is_current": true
+      "title": "Product Designer",
+      "company": "Craft My Plate",
+      "employment_type": "Full-time",
+      "start": { "year": 2025, "month": 1 },
+      "end": { "year": 2026, "month": 3 },
+      "is_current": false,
+      "duration": "1 yr 3 mos",
+      "location": "Hyderabad, Telangana, India",
+      "work_mode": "On-site",
+      "description": "Led design and shipped V2 of the platform…",
+      "skills": ["Product Design", "Strategy"]
     }
   ],
   "education": [
@@ -127,11 +132,11 @@ Company, school, job and post URLs are rejected with `400`.
   "certifications": [],
   "languages": [],
   "meta": {
-    "sources": ["voyager_api", "public_jsonld"],
+    "sources": ["voyager_api", "experience_details_page", "public_jsonld"],
     "missing_sections": ["skills", "certifications", "languages"],
     "partial": true,
-    "fetched_at": "2026-08-31T06:15:07Z",
-    "duration_ms": 5533
+    "fetched_at": "2026-08-31T06:55:22Z",
+    "duration_ms": 8382
   }
 }
 ```
@@ -207,26 +212,44 @@ profile page load contains zero section requests, because none happen.
 
 ### How sections are retrieved
 
-The authenticated API returns the core profile but no experience or
-education. Those come from a second source: the **logged-out** profile page,
-which LinkedIn renders differently because it is what search engines index.
-It carries a `<script type="application/ld+json">` block:
+The authenticated API returns the core profile but no sections. Two further
+sources fill what they can, fetched concurrently.
+
+**Experience — the `/details/experience/` page.** This is the page behind
+LinkedIn's "Show all experiences" link, and it is one of the few LinkedIn
+still renders on the server. A plain GET returns the whole list, unmasked:
+
+```
+Product Designer
+Craft My Plate · Full-time
+Jan 2025 - Mar 2026 · 1 yr 3 mos
+Hyderabad, Telangana, India · On-site
+```
+
+The parser (`app/linkedin/details.py`) anchors on **the date line**, whose
+shape LinkedIn has kept stable, and reads the lines around it. Nothing keys
+on a CSS class, because LinkedIn regenerates class names (`_02484ad3`) on
+every deploy — a parser built on those would break within days.
+
+**Education — the logged-out page's JSON-LD.** LinkedIn renders a different
+page for visitors with no session, because that is what search engines index,
+and it embeds structured data:
 
 ```json
 {
   "@type": "Person",
-  "worksFor": [{ "name": "Gates Foundation", "member": { "startDate": 2000 } }],
   "alumniOf": [{ "name": "Harvard University", "member": { "startDate": 1973, "endDate": 1975 } }]
 }
 ```
 
-So the API reads from two places and merges them, the authenticated source
-winning wherever both have a value:
-
 | Source | Provides |
 |---|---|
 | Voyager API (your session) | name, headline, about, location, images, websites |
-| Public JSON-LD (no cookies) | experience, education, dates, readable locality |
+| `/details/experience/` (your session) | experience, in full and unmasked |
+| Public JSON-LD (no cookies) | education, readable locality |
+
+The authenticated sources win wherever two sources disagree, because the
+public page truncates and masks.
 
 ### Sessions get revoked, and why
 
@@ -277,7 +300,7 @@ Open http://127.0.0.1:8000/docs
 pytest
 ```
 
-86 tests, no network calls. Parsers are tested against saved fixtures, and
+106 tests, no network calls. Parsers are tested against saved fixtures, and
 the LinkedIn client is mocked at the API layer. Fixtures are hand-authored
 with LinkedIn's exact structure and a fictional person, so no real profile
 data lives in this repository.
@@ -318,17 +341,43 @@ does not stall on a cold start.
 
 Written plainly, because these are real.
 
-**Skills, certifications and languages are not returned.** Neither source
-exposes them. The authenticated API omits them from the core profile, and
-LinkedIn's public JSON-LD does not include them. Retrieving them needs a
-`queryId` for the section queries, which LinkedIn does not publish and
-rotates on deploy. `meta.missing_sections` names them on every response
-rather than pretending they are empty.
+**Skills, certifications and languages are not returned.** This is the real
+limit of a no-browser approach, and it is worth being precise about why.
+
+LinkedIn renders those sections **client-side**. Their detail pages —
+`/details/skills/`, `/details/certifications/`, `/details/languages/` —
+answer `200` with a full-size document, but the section content is not in it.
+The skills page contains only the filter tabs ("All", "Industry Knowledge",
+"Tools & Technologies") and then the advertisement block. The data arrives
+afterwards, through JavaScript this API deliberately does not run.
+
+Verified against two profiles, one with all sections populated and one
+without, to rule out an empty profile as the explanation. `/details/experience/`
+server-renders; the other four do not.
+
+Reaching them needs either a browser, which the brief excludes, or a GraphQL
+`queryId` for the section queries. LinkedIn does not publish those hashes,
+accepts no query that is not on its allowlist, and rotates them on deploy.
+
+`meta.missing_sections` names them on every response rather than returning
+empty arrays that would read as "this person has no skills".
+
+**Per-role skills do come through.** The experience page lists them per
+position — `"Product Design, Strategy and +2 skills"` — so `experience[].skills`
+is populated where LinkedIn shows it. The unnamed `+2` are not on the page,
+so they are not invented.
+
+**Education depends on an aggressively throttled page.** The public JSON-LD
+is the only source for it, and LinkedIn answers `999` after roughly one
+request per IP, for minutes at a time. Successful reads are cached for an
+hour. Under load, expect education to be missing more often than present.
+It also gives school and years but no degree or field of study.
 
 **The public page masks some values.** For logged-out readers LinkedIn stars
 out parts of the data — job titles appear as `********`, some company names
 as `************ ******`. Masked values are returned as `null`, not as
-asterisks. Named organisations usually come through; titles often do not.
+asterisks. This is why the authenticated `/details/experience/` page is
+preferred for experience: it has no masking at all.
 
 **The public page is throttled hard.** LinkedIn answers `999` after roughly
 one request from an IP and keeps doing so for minutes. Successful reads are
@@ -365,10 +414,11 @@ app/
   linkedin/urls.py     URL parsing
   linkedin/parse.py    Voyager response  -> schema
   linkedin/jsonld.py   public JSON-LD    -> schema
+  linkedin/details.py  /details/experience/ page -> schema
   linkedin/merge.py    combines both sources
   models/profile.py    the response schema
   store/keys.py        API keys, hashed; cookies, encrypted
-tests/                 86 tests, no network
+tests/                 106 tests, no network
 scripts/               throwaway probes used to work out the endpoints
 ```
 

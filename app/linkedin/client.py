@@ -222,7 +222,7 @@ class LinkedInClient:
             self._check(r)
             return r.text if r.status_code == 200 else None
 
-    async def fetch_public_jsonld(self, public_id: str, attempts: int = 3) -> dict | None:
+    async def fetch_public_jsonld(self, public_id: str, attempts: int = 2) -> dict | None:
         """The logged-out read. Adds experience and education.
 
         Sent with NO cookies on purpose: this is the renderer LinkedIn gives
@@ -237,7 +237,7 @@ class LinkedInClient:
             return cached
 
         url = f"https://www.linkedin.com/in/{public_id}/"
-        delay = 2.0
+        delay = 1.5
 
         async with httpx.AsyncClient(
             headers=self._doc_headers(), timeout=self._timeout, follow_redirects=True
