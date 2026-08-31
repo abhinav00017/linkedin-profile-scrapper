@@ -8,14 +8,40 @@ way LinkedIn's own clients shape them.
 
 ---
 
-## Try it
+## For reviewers — how to test
+
+Everything you need is one request. The API key is in the submission form.
+
+**1. One curl, a whole profile:**
 
 ```bash
 curl -s "https://linkedin-profile-scrapper-zvob.onrender.com/v1/profile?url=https://www.linkedin.com/in/williamhgates/" \
-  -H "X-API-Key: YOUR_KEY"
+  -H "X-API-Key: PASTE_THE_KEY_FROM_THE_SUBMISSION_FORM"
 ```
 
-Interactive documentation: **`/docs`**
+**2. Try any public profile** — swap the `url` for anyone. It is not
+hardcoded to one person:
+
+```bash
+curl -s "https://linkedin-profile-scrapper-zvob.onrender.com/v1/profile?url=https://www.linkedin.com/in/satyanadella/" \
+  -H "X-API-Key: PASTE_THE_KEY_FROM_THE_SUBMISSION_FORM"
+```
+
+**3. Or click through the interactive docs** — no curl needed:
+[`/docs`](https://linkedin-profile-scrapper-zvob.onrender.com/docs)
+→ open `GET /v1/profile` → **Try it out** → paste the key in the
+`X-API-Key` box → **Execute**.
+
+Notes:
+
+- The host is a free tier that sleeps after 15 minutes idle. The **first**
+  request may take up to ~50 seconds while it wakes; every request after is
+  fast. Hitting `/healthz` first is a quick way to wake it.
+- No key of your own is needed — the provided key already carries a working
+  LinkedIn session. To read with *your* own LinkedIn account instead, see
+  [`POST /v1/auth`](#post-v1auth) below.
+- `skills`, `certifications` and `languages` return empty by design — see
+  [Known limitations](#known-limitations) for exactly why, and the evidence.
 
 ---
 
