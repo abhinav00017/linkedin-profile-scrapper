@@ -11,7 +11,7 @@ way LinkedIn's own clients shape them.
 ## Try it
 
 ```bash
-curl -s "https://linkedin-profile-api.fly.dev/v1/profile?url=https://www.linkedin.com/in/williamhgates/" \
+curl -s "https://linkedin-profile-scrapper-zvob.onrender.com/v1/profile?url=https://www.linkedin.com/in/williamhgates/" \
   -H "X-API-Key: YOUR_KEY"
 ```
 
@@ -47,7 +47,7 @@ caller can get another caller's account throttled.
 Exchange a LinkedIn cookie for an API key.
 
 ```bash
-curl -s -X POST https://linkedin-profile-api.fly.dev/v1/auth \
+curl -s -X POST https://linkedin-profile-scrapper-zvob.onrender.com/v1/auth \
   -H "Content-Type: application/json" \
   -d '{"li_at": "AQEDAT...", "jsessionid": "ajax:1234567890"}'
 ```
@@ -72,7 +72,7 @@ receive is a key that works. A dead cookie returns `422`.
 ### `GET /v1/profile`
 
 ```bash
-curl -s "https://linkedin-profile-api.fly.dev/v1/profile?url=https://www.linkedin.com/in/williamhgates/" \
+curl -s "https://linkedin-profile-scrapper-zvob.onrender.com/v1/profile?url=https://www.linkedin.com/in/williamhgates/" \
   -H "X-API-Key: tk_QmpZ..."
 ```
 
@@ -322,18 +322,24 @@ data lives in this repository.
 
 ## Deployment
 
-Fly.io, HTTPS by default, with a persistent volume so keys survive redeploys.
+Live on Render (Docker), HTTPS by default. The repository also carries a
+`Dockerfile` and a `fly.toml`, so it deploys to Fly.io or any Docker host
+unchanged.
 
-```bash
-fly launch --no-deploy
-fly volumes create linkedin_api_data --size 1
-fly secrets set ENCRYPTION_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
-fly secrets set BOOTSTRAP_API_KEY="tk_demo_..." BOOTSTRAP_LI_AT="AQEDA..."
-fly deploy
-```
+Set three environment variables on the host:
 
-`auto_stop_machines = false` keeps the machine warm, so the first request
-does not stall on a cold start.
+| Variable | Purpose |
+|---|---|
+| `ENCRYPTION_KEY` | Required. Encrypts stored cookies. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+| `BOOTSTRAP_API_KEY` | A ready-made key, so a reviewer can call the API without first running `/v1/auth` |
+| `BOOTSTRAP_COOKIE_HEADER` | The full browser cookie header behind that key. Carries `JSESSIONID`, so the CSRF token builds correctly |
+
+The bootstrap key reads its session from the environment, not the database,
+so it keeps working even on a host with an ephemeral disk.
+
+On Render's free tier the instance sleeps after 15 minutes idle, so the
+first request after a rest takes about 50 seconds to wake, then runs
+normally.
 
 ---
 
