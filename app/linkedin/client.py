@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import html as htmllib
 import json
+import time
 import re
 from dataclasses import dataclass
 
@@ -56,6 +57,38 @@ class RateLimited(LinkedInError):
 
 class ProfileNotFound(LinkedInError):
     """No such profile, or this session may not see it."""
+
+
+class _TimedCache:
+    """Small in-process cache with a time to live.
+
+    The public page is throttled aggressively, so holding a good answer for a
+    while is the difference between returning sections and returning none.
+    """
+
+    def __init__(self, ttl_seconds: float = 3600.0, max_entries: int = 500) -> None:
+        self._ttl = ttl_seconds
+        self._max = max_entries
+        self._entries: dict[str, tuple[float, dict]] = {}
+
+    def get(self, key: str) -> dict | None:
+        entry = self._entries.get(key)
+        if entry is None:
+            return None
+        stored_at, value = entry
+        if time.monotonic() - stored_at > self._ttl:
+            self._entries.pop(key, None)
+            return None
+        return value
+
+    def put(self, key: str, value: dict) -> None:
+        if len(self._entries) >= self._max:
+            oldest = min(self._entries, key=lambda k: self._entries[k][0])
+            self._entries.pop(oldest, None)
+        self._entries[key] = (time.monotonic(), value)
+
+
+_PUBLIC_CACHE = _TimedCache()
 
 
 @dataclass(frozen=True)
@@ -177,10 +210,17 @@ class LinkedInClient:
 
         Sent with NO cookies on purpose: this is the renderer LinkedIn gives
         search engines, and it is the only place the sections appear as data.
-        LinkedIn throttles it hard, so we back off and give up quietly.
+
+        LinkedIn throttles this route hard, answering 999 for minutes at a
+        time. We cache what we get so a throttle does not erase a profile we
+        already read, and we give up quietly rather than fail the request.
         """
+        cached = _PUBLIC_CACHE.get(public_id)
+        if cached is not None:
+            return cached
+
         url = f"https://www.linkedin.com/in/{public_id}/"
-        delay = 1.0
+        delay = 2.0
 
         async with httpx.AsyncClient(
             headers=self._doc_headers(), timeout=self._timeout, follow_redirects=True
@@ -188,7 +228,10 @@ class LinkedInClient:
             for attempt in range(attempts):
                 r = await c.get(url)
                 if r.status_code == 200:
-                    return self._extract_person(r.text)
+                    person = self._extract_person(r.text)
+                    if person:
+                        _PUBLIC_CACHE.put(public_id, person)
+                    return person
                 if r.status_code in (999, 429):
                     if attempt == attempts - 1:
                         return None
